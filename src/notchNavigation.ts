@@ -30,8 +30,17 @@ export class NotchWheelGesture {
 }
 
 export function panelToReopen(last: PanelId | null, available: readonly PanelId[]): PanelId {
-  if (last && available.includes(last)) return last;
-  return available.find(panel => panel === 'calendar')
-    ?? available.find(panel => panel === 'command-center')
-    ?? available[0] ?? 'status';
+  const menus = available.filter(panel => panel !== 'status');
+  if (last && last !== 'status' && menus.includes(last)) return last;
+  return menus.find(panel => panel === 'calendar')
+    ?? menus.find(panel => panel === 'command-center')
+    ?? menus[0] ?? 'status';
+}
+
+export function cyclePanel(current: string, available: readonly PanelId[], direction: -1 | 1): PanelId | null {
+  const menus = available.filter(panel => panel !== 'status');
+  if (!menus.length) return null;
+  const index = menus.findIndex(panel => panel === current);
+  if (index < 0) return direction === 1 ? menus[0] : menus[menus.length - 1];
+  return menus[(index + direction + menus.length) % menus.length];
 }

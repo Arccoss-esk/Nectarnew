@@ -21,7 +21,7 @@ import { t as translate, useT } from "./i18n";
 import { NotchShelf, useShelf } from "./components/NotchShelf";
 import { parseCcLayout, parsePanelOrder, resolveCcLayout, type CcKind } from "./panelOrder";
 import { NotchProgressBorder } from "./components/NotchProgressBorder";
-import { NotchWheelGesture, panelToReopen } from "./notchNavigation";
+import { NotchWheelGesture, panelToReopen, cyclePanel } from "./notchNavigation";
 import type { PanelId } from "./panelOrder";
 import type { WidgetConfig } from "./components/StatusWidgetConfig";
 import {
@@ -980,17 +980,13 @@ function App() {
 
   const wheelGestureRef = useRef(new NotchWheelGesture());
 
-  // Music shifts position based on playing state:
-  // Playing: command-center → music → status → calendar (active, near command-center)
-  // Paused:  command-center → status → music → calendar (secondary, after status)
+  // Status is a hover summary, never a page in the menu carousel.
   const availableNotchModes = () => {
-    const musicBeforeStatus = isPlaying && mediaInfo.has_media && settingsMusicModeEnabled;
     const modes: ('command-center' | 'status' | 'music' | 'calendar' | 'shelf')[] = panelOrder
       ? [...panelOrder]
-      : musicBeforeStatus
-        ? ['command-center', 'music', 'status', 'calendar', 'shelf']
-        : ['command-center', 'status', 'music', 'calendar', 'shelf'];
+      : ['command-center', 'music', 'calendar', 'shelf'];
     return modes.filter(m => {
+      if (m === 'status') return false;
       if (m === 'music' && (!settingsMusicModeEnabled || !mediaInfo.has_media)) return false;
       if (m === 'calendar' && !productivityEnabled) return false;
       if (m === 'shelf' && (!isNotchWindow || settingsLegacyMode || !panelShelf)) return false;
@@ -1001,18 +997,15 @@ function App() {
 
   const handleWheel = (e: React.WheelEvent) => {
     const target = e.target as HTMLElement;
-    const blocked = !!target.closest('.calendar-grid, .timer-column, .cal-scroll');
+    // The month grid is not scrollable. Horizontal swipes navigate even over
+    // the calendar lists; vertical scrolling inside lists/timers stays local.
+    const horizontal = Math.abs(e.deltaX) > Math.abs(e.deltaY);
+    const blocked = !horizontal && !!target.closest('.timer-column, .cal-scroll');
     const direction = wheelGestureRef.current.consume(e, performance.now(), isHovered && !blocked && nectarMode !== 'tour');
     if (!direction) return;
 
-    const availableModes = availableNotchModes();
-
-    if (nectarMode === 'tour') return;
-    const currentIndex = availableModes.indexOf(nectarMode);
-    if (currentIndex === -1) return;
-
-    const nextIndex = (currentIndex + direction + availableModes.length) % availableModes.length;
-    const nextMode = availableModes[nextIndex];
+    const nextMode = cyclePanel(nectarMode, availableNotchModes(), direction);
+    if (!nextMode) return;
     manualMusicRef.current = nextMode === 'music';
     lastOpenedPanelRef.current = nextMode;
     menuOpenedRef.current = true;
@@ -1598,6 +1591,7 @@ function App() {
   };
 
   const handleVolumeWheel = (e: React.WheelEvent) => {
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
     if (!settingsScrollVolume) return;
     e.stopPropagation();
     const change = e.deltaY < 0 ? 0.02 : -0.02;
@@ -1605,6 +1599,7 @@ function App() {
   };
 
   const handleBrightnessWheel = (e: React.WheelEvent) => {
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
     if (!settingsScrollVolume) return;
     e.stopPropagation();
     handleBrightnessChange(Math.min(100, Math.max(0, Math.round(currentBrightness + (e.deltaY < 0 ? 2 : -2)))));

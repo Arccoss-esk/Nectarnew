@@ -122,6 +122,7 @@ export function CompactMediaPlayer({
   const t = useT();
 
   const scrollVolume = (e: React.WheelEvent) => {
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
     if (localStorage.getItem("nectar-notch-scroll-volume") !== "true") return;
     e.stopPropagation();
     const change = e.deltaY < 0 ? 0.02 : -0.02;
