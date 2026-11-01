@@ -1811,6 +1811,26 @@ fn volume_mixer_physical_rect_for(app: &AppHandle) -> Option<(i32, i32, i32, i32
     ))
 }
 
+/// Match the 196 CSS-pixel centered cards in Overlay.css, including both
+/// Windows DPI scaling and Nectar zoom. Do not activate on adjacent monitors.
+fn at_overlay_card_edge(app: &AppHandle, cursor: windows::Win32::Foundation::POINT, right: bool) -> bool {
+    app.primary_monitor().ok().flatten().is_some_and(|monitor| {
+        let pos = monitor.position();
+        let size = monitor.size();
+        let scale = monitor.scale_factor() * crate::utils::get_nectar_scale(app);
+        let height = (196.0 * scale) as i32;
+        let top = pos.y + size.height as i32 / 2 - height / 2;
+        let screen_right = pos.x + size.width as i32;
+        let in_edge = if right {
+            cursor.x >= screen_right - 8 && cursor.x < screen_right
+        } else {
+            cursor.x >= pos.x && cursor.x <= pos.x + 8
+        };
+        in_edge && cursor.y >= top && cursor.y <= top + height
+            && cursor.y >= pos.y && cursor.y < pos.y + size.height as i32
+    })
+}
+
 /// The hook only fires on movement, so a cursor that stops just outside the mixer would leave it
 /// open. This closes the card once the cursor is off it.
 fn setup_volume_mixer_watchdog(app_handle: AppHandle) {
@@ -1830,15 +1850,7 @@ fn setup_volume_mixer_watchdog(app_handle: AppHandle) {
         if inside {
             continue;
         }
-        let at_left_edge = app_handle
-            .primary_monitor()
-            .ok()
-            .flatten()
-            .is_some_and(|m| {
-                let pos = m.position();
-                let size = m.size();
-                pt.x <= pos.x + 8 && pt.y >= pos.y && pt.y <= pos.y + size.height as i32
-            });
+        let at_left_edge = at_overlay_card_edge(&app_handle, pt, false);
         if !at_left_edge && MH_LAST_LEFT_EDGE_HOVER.swap(0, Ordering::Relaxed) != 0 {
             MH_LEFT_EXPIRY_MS.store(0, Ordering::Relaxed);
             let _ = app_handle.emit("volume-edge-hover", false);
@@ -2209,9 +2221,7 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
 
             // --- Left Edge (Volume) ---
             if !fg_fs {
-                let at_left_edge = cursor.x <= (mon_x + 8) &&
-                                   cursor.y >= mon_y &&
-                                   cursor.y <= (mon_y + mon_h);
+                let at_left_edge = at_overlay_card_edge(app_handle, cursor, false);
 
                 // The collapsed card sticks out past the 8px edge band, keep the hover alive over it too
                 // or the HUD hides mid-click.
@@ -2250,9 +2260,7 @@ unsafe fn process_mouse_move(app_handle: &AppHandle, cursor: windows::Win32::Fou
 
             // --- Right Edge (Brightness) ---
             if !fg_fs {
-                let at_right_edge = cursor.x >= (mon_x + mon_w - 8) &&
-                                    cursor.y >= mon_y &&
-                                    cursor.y <= (mon_y + mon_h);
+                let at_right_edge = at_overlay_card_edge(app_handle, cursor, true);
 
                 if at_right_edge {
                     MH_RIGHT_EXPIRY_MS.store(now + 500, Ordering::Relaxed);

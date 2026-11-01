@@ -21,6 +21,8 @@ import { t as translate, useT } from "./i18n";
 import { NotchShelf, useShelf } from "./components/NotchShelf";
 import { parseCcLayout, parsePanelOrder, resolveCcLayout, type CcKind } from "./panelOrder";
 import { NotchProgressBorder } from "./components/NotchProgressBorder";
+import { NotchWheelGesture, panelToReopen } from "./notchNavigation";
+import type { PanelId } from "./panelOrder";
 import type { WidgetConfig } from "./components/StatusWidgetConfig";
 import {
   DEFAULT_DUAL_CLOCK_ZONE,
@@ -692,6 +694,9 @@ function App() {
     return index < 0 ? { display: 'none' as const } : { order: index };
   };
   const rememberedModeRef = useRef<"command-center" | "calendar" | null>(null);
+  // Explicit panel choices are separate from the automatic compact/hover view.
+  const lastOpenedPanelRef = useRef<PanelId | null>(null);
+  const menuOpenedRef = useRef(false);
   const [settingsVisualizerEnabled, setSettingsVisualizerEnabled] = useState(() => localStorage.getItem("nectar-visualizer-enabled") !== "false");
   const [settingsAlbumArtEnabled, setSettingsAlbumArtEnabled] = useState(() => localStorage.getItem("nectar-media-album-art-enabled") !== "false");
   const [settingsAmbienceEnabled, setSettingsAmbienceEnabled] = useState(() => localStorage.getItem("nectar-media-ambience-enabled") !== "false");
@@ -973,10 +978,7 @@ function App() {
 
   // Window height is now kept constant to prevent rendering layout lag and sharp corners
 
-  const wheelAccumRef = useRef(0);
-  const wheelIdleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const WHEEL_STEP_THRESHOLD = 60;
-  const WHEEL_IDLE_RESET_MS = 180;
+  const wheelGestureRef = useRef(new NotchWheelGesture());
 
   // Music shifts position based on playing state:
   // Playing: command-center → music → status → calendar (active, near command-center)
@@ -999,23 +1001,9 @@ function App() {
 
   const handleWheel = (e: React.WheelEvent) => {
     const target = e.target as HTMLElement;
-    if (target.closest('.calendar-grid') || target.closest('.timer-column') || target.closest('.cal-scroll')) {
-      return;
-    }
-
-    if (!isHovered) return;
-
-    // Use absolute values to detect horizontal swipe gestures on trackpad
-    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-    if (Math.abs(delta) < 2) return; // Ignore near-zero noise
-
-    wheelAccumRef.current += delta;
-    if (wheelIdleTimeoutRef.current) clearTimeout(wheelIdleTimeoutRef.current);
-    wheelIdleTimeoutRef.current = setTimeout(() => { wheelAccumRef.current = 0; }, WHEEL_IDLE_RESET_MS);
-
-    if (Math.abs(wheelAccumRef.current) < WHEEL_STEP_THRESHOLD) return;
-    const direction = wheelAccumRef.current > 0 ? 1 : -1;
-    wheelAccumRef.current = 0;
+    const blocked = !!target.closest('.calendar-grid, .timer-column, .cal-scroll');
+    const direction = wheelGestureRef.current.consume(e, performance.now(), isHovered && !blocked && nectarMode !== 'tour');
+    if (!direction) return;
 
     const availableModes = availableNotchModes();
 
@@ -1026,6 +1014,8 @@ function App() {
     const nextIndex = (currentIndex + direction + availableModes.length) % availableModes.length;
     const nextMode = availableModes[nextIndex];
     manualMusicRef.current = nextMode === 'music';
+    lastOpenedPanelRef.current = nextMode;
+    menuOpenedRef.current = true;
     setNectarMode(nextMode);
   };
 
@@ -1569,6 +1559,11 @@ function App() {
     }
     if (!productivityEnabled) return;
 
+    if (nectarMode !== 'calendar') {
+      lastOpenedPanelRef.current = 'calendar';
+      menuOpenedRef.current = true;
+    }
+
     setNectarMode(prev => {
       if (prev === 'calendar') {
         // Return to music mode if media is present and playing and music mode is enabled, otherwise status
@@ -1576,6 +1571,24 @@ function App() {
       }
       return 'calendar';
     });
+  };
+
+  const toggleLastPanel = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isTimerFinished) {
+      resetTimer();
+      return;
+    }
+    if (menuOpenedRef.current) {
+      menuOpenedRef.current = false;
+      setNectarMode('status');
+      return;
+    }
+    const next = panelToReopen(lastOpenedPanelRef.current, availableNotchModes());
+    lastOpenedPanelRef.current = next;
+    menuOpenedRef.current = true;
+    manualMusicRef.current = next === 'music';
+    setNectarMode(next);
   };
 
   const conditionLabel = (condition: string) => {
@@ -1822,6 +1835,7 @@ function App() {
         }}
         onHoverEnd={() => {
           setIsHovered(false);
+          menuOpenedRef.current = false;
           if (nectarMode === 'command-center' || nectarMode === 'calendar') rememberedModeRef.current = nectarMode;
           const targetMode = mediaInfo.has_media && isPlaying && settingsMusicCompactNotch ? 'music' : 'status';
           if (nectarMode === 'music') {
@@ -2164,7 +2178,7 @@ function App() {
                             <div className="time-center">
                               <div
                                 className="time-flip-container"
-                                onClick={toggleCalendarMode}
+                                onClick={toggleLastPanel}
                                 style={dualClockSize ? { minWidth: dualClockSize.main } : undefined}
                               >
                                 <AnimatePresence initial={false}>
@@ -2196,7 +2210,7 @@ function App() {
                                 </AnimatePresence>
                               </div>
                               {showDualClock && (
-                                <div className="time-secondary" onClick={toggleCalendarMode} data-tooltip={dualClockTooltip}>
+                                <div className="time-secondary" onClick={toggleLastPanel} data-tooltip={dualClockTooltip}>
                                   <span className="time-secondary-label">{dualClockLabel}</span>
                                   <span className="time-secondary-value">{dualTime}</span>
                                   {dualDayShift !== 0 && <span className="time-secondary-shift">{dayShiftLabel(dualDayShift)}</span>}
