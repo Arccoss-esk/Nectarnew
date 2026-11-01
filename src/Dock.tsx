@@ -677,10 +677,14 @@ const Dock = memo(function Dock() {
     }
   };
 
-  const handleAppClick = async (app: AppInfo) => {
+  const handleAppClick = async (app: AppInfo, anchor?: { x: number; y: number }) => {
     try {
       if (app.path === 'start') {
-        await invoke('open_app', { appName: 'start' });
+        if (anchor) {
+          await invoke('open_start_from_button', { anchorX: anchor.x, anchorY: anchor.y });
+        } else {
+          await invoke('open_app', { appName: 'start' });
+        }
       } else if (app.all_hwnds && app.all_hwnds.length > 1) {
         // Several windows: bring the most recent forward, then cycle.
         await invoke('focus_app_windows', { hwnds: app.all_hwnds.map(([hwnd]) => hwnd) });
@@ -1161,7 +1165,8 @@ const Dock = memo(function Dock() {
                     onPointerCancel={() => setPressedApp(null)}
                     onClick={(e) => {
                       e.stopPropagation();
-                      handleAppClick(startItem);
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      handleAppClick(startItem, { x: rect.left + rect.width / 2, y: rect.top });
                     }}
                   >
                     <img src={resolveStartIcon(startIcon)} alt="Start" className={startIcon === "default" ? "nectar-icon-img" : "nectar-icon-img start-img"} style={startIcon.startsWith("custom:") ? { borderRadius: "8px" } : undefined} draggable={false} />

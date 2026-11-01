@@ -27,6 +27,12 @@ jobs:
         run: npm ci
       - name: Test notch navigation
         run: node --test tests/notchNavigation.test.mjs
+      - name: Test Start menu placement
+        shell: pwsh
+        run: |
+          rustc --test src-tauri/src/start_menu_geometry.rs -o start-menu-tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./start-menu-tests.exe
       - name: Build Windows executable
         run: bun run tauri build --no-bundle
       - name: Upload executable
