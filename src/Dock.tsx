@@ -271,6 +271,7 @@ const Dock = memo(function Dock() {
   const [isEdgeHovered, setIsEdgeHovered] = useState(false);
   const [isOverlapped, setIsOverlapped] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [launcherX, setLauncherX] = useState<number | null>(null);
   const [showAddPopup, setShowAddPopup] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, app: AppInfo | null, power?: boolean } | null>(null);
   const [contextMenuHeight, setContextMenuHeight] = useState(0);
@@ -763,6 +764,7 @@ const Dock = memo(function Dock() {
 
   const closePopup = () => {
     setShowAddPopup(false);
+    setLauncherX(null);
     invoke('set_menu_open', { open: false, rect: null }).catch(() => {});
   };
 
@@ -808,7 +810,7 @@ const Dock = memo(function Dock() {
 
     invoke('set_menu_open', { open, rect }).catch(() => {});
 
-  }, [contextMenu, showAddPopup, pinnedApps, activeApps, activeSubmenu, scale]);
+  }, [contextMenu, showAddPopup, launcherX, popupBottom, viewportWidth, pinnedApps, activeApps, activeSubmenu, scale]);
 
   const dockItems = useMemo(() => {
     const runningMap = new Map();
@@ -1194,13 +1196,18 @@ const Dock = memo(function Dock() {
                   <motion.div
                     className="dock-icon"
                     variants={iconVariants}
+                    data-launcher-trigger
                     animate={pressedApp === 'search' ? "tap" : (hoveredApp === 'search' ? "hover" : "idle")}
                     onPointerDown={() => setPressedApp('search')}
                     onPointerUp={() => setPressedApp(null)}
                     onPointerCancel={() => setPressedApp(null)}
                     onClick={(e) => {
                       e.stopPropagation();
-                      invoke('open_app', { appName: 'search' }).catch((err) => console.error('Failed to open search:', err));
+                      if (showAddPopup && launcherX !== null) { closePopup(); return; }
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      closeMenu();
+                      setLauncherX(rect.left + rect.width / 2);
+                      setShowAddPopup(true);
                     }}
                   >
                     <SearchIcon />
@@ -1733,7 +1740,16 @@ const Dock = memo(function Dock() {
           <AddAppPopup 
             containerRef={popupRef}
             onClose={closePopup} 
-            onAdd={(app: AppInfo) => { togglePin(app); closePopup(); }}
+            launcherX={launcherX}
+            onAdd={(app: AppInfo) => {
+              if (launcherX !== null) {
+                closePopup();
+                void handleAppClick(app);
+              } else {
+                togglePin(app);
+                closePopup();
+              }
+            }}
             scale={scale}
             runningApps={activeApps}
             pinned={pinnedApps}
@@ -1767,7 +1783,8 @@ function AddAppPopup({
   scale,
   runningApps,
   pinned,
-  bottom
+  bottom,
+  launcherX
 }: {
   onClose: () => void;
   onAdd: (app: AppInfo) => void;
@@ -1776,7 +1793,9 @@ function AddAppPopup({
   runningApps: AppInfo[];
   pinned: AppInfo[];
   bottom: number;
+  launcherX: number | null;
 }) {
+  const launching = launcherX !== null;
   const t = useT();
   const [apps, setApps] = useState<AppInfo[]>([]);
   const [search, setSearch] = useState("");
@@ -1805,7 +1824,7 @@ function AddAppPopup({
   // Reset selection when search changes
   useEffect(() => {
     setSelectedIndex(0);
-  }, [debouncedSearch]);
+  }, [launching ? search : debouncedSearch]);
 
   // Running apps that aren't pinned: already in memory, so the default view is instant.
   // Matching is fuzzy, a pinned .lnk and its running .exe are the same app.
@@ -1815,7 +1834,8 @@ function AddAppPopup({
   );
 
   const sections = useMemo(() => {
-    const s = debouncedSearch.trim().toLowerCase();
+    const s = (launching ? search : debouncedSearch).trim().toLowerCase();
+    if (launching && !s) return [];
     // No query: running apps, then everything installed, minus what's pinned.
     // The backend already drops helper entries.
     if (!s) {
@@ -1847,7 +1867,7 @@ function AddAppPopup({
     starts.sort(byName);
     contains.sort(byName);
     return [{ title: null, items: [...starts, ...contains].slice(0, 50) }];
-  }, [apps, debouncedSearch, pinned, runningSuggestions]);
+  }, [apps, search, launching, debouncedSearch, pinned, runningSuggestions, t]);
 
   // Flat selectable list; section headers are not selectable.
   const flat = useMemo(() => sections.flatMap((s) => s.items), [sections]);
@@ -1900,12 +1920,13 @@ function AddAppPopup({
         const target = flat[selectedIndex];
         if (!target) return;
         // Already on the dock: just dismiss, never pin twice.
-        if (pinned.some((p) => isSameApp(p, target))) onClose();
+        if (!launching && pinned.some((p) => isSameApp(p, target))) onClose();
         else onAdd(target);
       }
     };
     const handleMouseDown = (e: MouseEvent) => {
       const popup = containerRef.current;
+      if (launching && (e.target as Element).closest?.("[data-launcher-trigger]")) return;
       if (popup && !popup.contains(e.target as Node)) {
         onClose();
       }
@@ -1919,7 +1940,7 @@ function AddAppPopup({
       window.removeEventListener("blur", handleBlur);
       document.removeEventListener("mousedown", handleMouseDown, true);
     };
-  }, [onClose, containerRef, flat, selectedIndex, onAdd, pinned]);
+  }, [onClose, containerRef, flat, selectedIndex, onAdd, pinned, launching]);
 
   // Fetch icons in parallel and apply them as one batch, one at a time looked like the list
   // shifting. Boxes are fixed size and images fade in.
@@ -1949,12 +1970,15 @@ function AddAppPopup({
   }, [flat, listIcons]);
 
   return (
-    <div className="add-popup-anchor" style={{ zoom: scale, bottom }}>
+    <div className="add-popup-anchor" style={launching ? {
+      zoom: scale, bottom: bottom + 22, width: 246,
+      left: Math.max(4, Math.min(launcherX / scale - 123, window.innerWidth / scale - 250)),
+    } : { zoom: scale, bottom }}>
       <motion.div
         ref={containerRef}
-        className="add-app-popup"
+        className={launching ? "add-app-popup app-launcher" : "add-app-popup"}
         style={{ transformOrigin: "bottom center" }}
-        initial={{ opacity: 0, scaleY: 0 }}
+        initial={{ opacity: 0, scaleY: launching ? 1 : 0 }}
         animate={{ opacity: 1, scaleY: 1 }}
         exit={{ opacity: 0, scaleY: 0, transition: { duration: 0.16, ease: "easeIn" } }}
         transition={{
@@ -1984,11 +2008,11 @@ function AddAppPopup({
             className="popup-search-input"
             placeholder={t("dockmenu.searchApps")}
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => { setSearch(e.target.value); setSelectedIndex(0); }}
           />
         </div>
         <div className="popup-apps-scroll" ref={listRef}>
-          {loading ? (
+          {launching && !search.trim() ? null : loading ? (
             <div aria-hidden>
               {Array.from({ length: 8 }, (_, i) => (
                 <div className="popup-app-row popup-skeleton-row" key={i}>
@@ -2004,7 +2028,7 @@ function AddAppPopup({
                 {sec.items.map((app) => {
                   const gi = flatIndex.get(app) ?? 0;
                   const icon = listIcons[app.path];
-                  const alreadyPinned = pinned.some((p) => isSameApp(p, app));
+                  const alreadyPinned = !launching && pinned.some((p) => isSameApp(p, app));
                   return (
                     <div
                       key={`${app.path}::${app.name}`}
@@ -2030,7 +2054,7 @@ function AddAppPopup({
                         )}
                       </div>
                       <span className="popup-app-name">{app.name}</span>
-                      <span className="popup-app-pin">{alreadyPinned ? "✓" : "+"}</span>
+                      {!launching && <span className="popup-app-pin">{alreadyPinned ? "✓" : "+"}</span>}
                     </div>
                   );
                 })}
@@ -2038,7 +2062,7 @@ function AddAppPopup({
             ))
           ) : (
             <div className="popup-empty">
-              {debouncedSearch.trim()
+              {(launching ? search : debouncedSearch).trim()
                 ? t("dockmenu.noResults")
                 : t("dockmenu.emptyHint")}
             </div>

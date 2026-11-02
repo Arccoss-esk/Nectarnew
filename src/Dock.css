@@ -960,3 +960,12 @@ body {
 .dock-show-desktop:hover {
   background: rgba(255, 255, 255, 0.45);
 }
+
+.add-app-popup.app-launcher {
+  width: 100%;
+  height: min(288px, calc(100vh - 100px));
+  flex-direction: column-reverse;
+}
+.app-launcher .popup-search-row {
+  margin: 4px 8px 8px;
+}
