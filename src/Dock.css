@@ -540,6 +540,15 @@ body {
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+.power-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: inherit;
+  background: transparent;
+  border: 0;
+}
+
 .menu-item:hover {
   background: var(--nectar-border, rgba(255, 255, 255, 0.12));
 }

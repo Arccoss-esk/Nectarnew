@@ -4,6 +4,15 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import './Dock.css';
+import { Moon, Power, RotateCcw } from 'lucide-react';
+import { message } from '@tauri-apps/plugin-dialog';
+
+const powerActions = [
+  { action: 'sleep', Icon: Moon },
+  { action: 'shutdown', Icon: Power },
+  { action: 'restart', Icon: RotateCcw },
+] as const;
+
 import { initTheme } from './theme';
 import { useSettingsSync } from './hooks/useSettingsSync';
 import { useT } from './i18n';
@@ -263,7 +272,7 @@ const Dock = memo(function Dock() {
   const [isOverlapped, setIsOverlapped] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showAddPopup, setShowAddPopup] = useState(false);
-  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, app: AppInfo | null } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, app: AppInfo | null, power?: boolean } | null>(null);
   const [contextMenuHeight, setContextMenuHeight] = useState(0);
   const [contextMenuWidth, setContextMenuWidth] = useState(0);
   const [activeSubmenu, setActiveSubmenu] = useState<string | null>(null);
@@ -677,14 +686,10 @@ const Dock = memo(function Dock() {
     }
   };
 
-  const handleAppClick = async (app: AppInfo, anchor?: { x: number; y: number }) => {
+  const handleAppClick = async (app: AppInfo) => {
     try {
       if (app.path === 'start') {
-        if (anchor) {
-          await invoke('open_start_from_button', { anchorX: anchor.x, anchorY: anchor.y });
-        } else {
-          await invoke('open_app', { appName: 'start' });
-        }
+        await invoke('open_app', { appName: 'start' });
       } else if (app.all_hwnds && app.all_hwnds.length > 1) {
         // Several windows: bring the most recent forward, then cycle.
         await invoke('focus_app_windows', { hwnds: app.all_hwnds.map(([hwnd]) => hwnd) });
@@ -736,7 +741,7 @@ const Dock = memo(function Dock() {
 
 
 
-  const handleContextMenu = (e: React.MouseEvent, app: AppInfo | null) => {
+  const handleContextMenu = (e: React.MouseEvent, app: AppInfo | null, power = false) => {
     e.stopPropagation();
     e.preventDefault();
     setContextMenuHeight(0);
@@ -746,7 +751,7 @@ const Dock = memo(function Dock() {
     setContextMenu({
       x: app ? target.left + target.width / 2 : (dockRect ? dockRect.left + dockRect.width / 2 : e.clientX),
       y: dockRect ? dockRect.top : e.clientY,
-      app,
+      app, power,
     });
   };
 
@@ -1165,8 +1170,8 @@ const Dock = memo(function Dock() {
                     onPointerCancel={() => setPressedApp(null)}
                     onClick={(e) => {
                       e.stopPropagation();
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      handleAppClick(startItem, { x: rect.left + rect.width / 2, y: rect.top });
+                      if (contextMenu?.power) closeMenu();
+                      else handleContextMenu(e, startItem, true);
                     }}
                   >
                     <img src={resolveStartIcon(startIcon)} alt="Start" className={startIcon === "default" ? "nectar-icon-img" : "nectar-icon-img start-img"} style={startIcon.startsWith("custom:") ? { borderRadius: "8px" } : undefined} draggable={false} />
@@ -1597,7 +1602,18 @@ const Dock = memo(function Dock() {
           }}
           onClick={(e) => e.stopPropagation()}
         >
-          {contextMenu.app ? (
+          {contextMenu.power ? powerActions.map(({ action, Icon }) => (
+            <button key={action} className="menu-item power-menu-item" type="button" onClick={async () => {
+              closeMenu();
+              try {
+                await invoke('dock_power_action', { action });
+              } catch (error) {
+                await message(String(error), { title: t('dockmenu.powerError'), kind: 'error' });
+              }
+            }}>
+              <Icon size={16} />{t('dockmenu.' + action)}
+            </button>
+          )) : contextMenu.app ? (
             <>
               {contextMenu.app.is_running && contextMenu.app.path !== 'start' && (
                 <>

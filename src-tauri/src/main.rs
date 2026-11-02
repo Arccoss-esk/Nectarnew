@@ -20,8 +20,6 @@ mod connections;
 mod audio_devices;
 mod i18n;
 mod shelf;
-mod start_menu;
-mod start_menu_geometry;
 
 use tauri::Manager;
 use windows::Win32::System::Console::SetConsoleCtrlHandler;
@@ -106,7 +104,6 @@ fn main() {
             open_tray_window,
             open_tray_at_cursor,
             open_tray_from_button,
-            open_start_from_button,
             show_desktop,
             open_wifi_settings,
             open_sound_settings,
@@ -132,6 +129,7 @@ fn main() {
             change_notch_mode,
             sync_appbar,
             open_app,
+            dock_power_action,
             launch_new_instance,
             update_dock_rect,
             update_notch_rect,

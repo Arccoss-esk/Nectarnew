@@ -462,12 +462,38 @@ fn send_key_tap(vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY, ho
 
 /// True while the native Start menu has focus (StartMenuExperienceHost, or SearchHost on 24H2+).
 fn is_start_menu_open() -> bool {
-    crate::start_menu::foreground_start_window().is_some()
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.0.is_null() {
+            return false;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(fg, Some(&mut pid));
+        if pid == 0 {
+            return false;
+        }
+        if let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+            let mut buf = [0u16; 260];
+            let mut len = buf.len() as u32;
+            let ok = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut len);
+            let _ = CloseHandle(process);
+            if ok.is_ok() {
+                let path = String::from_utf16_lossy(&buf[..len as usize]);
+                let file = path.rsplit('\\').next().unwrap_or("").to_lowercase();
+                return file == "startmenuexperiencehost.exe" || file == "searchhost.exe";
+            }
+        }
+        false
+    }
 }
 
 /// Toggles the native Start menu. If it's open, Escape closes it, otherwise tap Win.
 /// Tapping Win blindly replayed the open animation on a quick second click.
-fn toggle_start_menu(anchor: Option<crate::start_menu::StartAnchor>) {
+fn toggle_start_menu() {
     let now = get_now_ms();
     if now - LAST_START_TOGGLE_MS.load(Ordering::Relaxed) < START_TOGGLE_DEBOUNCE_MS {
         return;
@@ -480,29 +506,39 @@ fn toggle_start_menu(anchor: Option<crate::start_menu::StartAnchor>) {
             send_key_tap(VK_ESCAPE, 0);
         } else {
             send_key_tap(VK_LWIN, START_WIN_KEY_HOLD_MS);
-            if let Some(anchor) = anchor {
-                crate::start_menu::position_opened_start(anchor, now);
-            }
         }
     });
 }
 
-/// DOM client coordinates already include Nectar's CSS zoom. Apply only the
-/// WebView's DPI factor and client origin to get physical screen coordinates.
 #[tauri::command]
-pub fn open_start_from_button(window: tauri::WebviewWindow, anchor_x: f64, anchor_y: f64) -> Result<(), String> {
-    if !anchor_x.is_finite() || !anchor_y.is_finite() {
-        return Err("Invalid Start button coordinates".into());
+pub async fn dock_power_action(window: tauri::WebviewWindow, action: String) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    if !crate::state::is_dock_label(window.label()) {
+        return Err("Dock window required".into());
     }
-    let origin = window.inner_position().map_err(|e| e.to_string())?;
-    let scale = window.scale_factor().map_err(|e| e.to_string())?;
-    let anchor = crate::start_menu::StartAnchor {
-        x: origin.x + (anchor_x * scale).round() as i32,
-        y: origin.y + (anchor_y * scale).round() as i32,
-        gap: (8.0 * scale).round() as i32,
-    };
-    toggle_start_menu(Some(anchor));
-    Ok(())
+    tauri::async_runtime::spawn_blocking(move || {
+        let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").ok_or("Missing SystemRoot")?).join("System32");
+        let mut command = match action.as_str() {
+            "shutdown" | "restart" => {
+                let mut cmd = Command::new(system.join("shutdown.exe"));
+                cmd.args([if action == "restart" { "/r" } else { "/s" }, "/t", "0"]);
+                cmd
+            }
+            "sleep" => {
+                let mut cmd = Command::new(system.join(r"WindowsPowerShell\v1.0\powershell.exe"));
+                cmd.args(["-NoProfile", "-NonInteractive", "-Command",
+                    "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Windows.Forms; if (-not [System.Windows.Forms.Application]::SetSuspendState('Suspend', $false, $false)) { throw 'Windows could not enter sleep mode' }"]);
+                cmd
+            }
+            _ => return Err("Unknown power action".to_string()),
+        };
+        let output = command.creation_flags(0x08000000).output().map_err(|err| err.to_string())?;
+        if output.status.success() { Ok(()) } else {
+            Err(format!("Windows ({}): {}", output.status, String::from_utf8_lossy(&output.stderr).trim()))
+        }
+    }).await.map_err(|err| err.to_string())?
 }
 
 pub fn send_win_chord(key: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) {
@@ -564,7 +600,7 @@ pub fn open_dock_extra(target: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn open_app(app: AppHandle, app_name: String, args: Option<String>) {
     if app_name == "start" {
-        toggle_start_menu(None);
+        toggle_start_menu();
         return;
     }
 
